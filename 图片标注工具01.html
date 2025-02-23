@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="zh">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>图片标注工具</title>
+  <style>
+    body {
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      background-color: #f0f0f0;
+    }
+
+    canvas {
+      border: 2px solid #000;
+      background-color: white;
+      cursor: crosshair;
+      max-width: 90vw;
+      max-height: 80vh;
+    }
+
+    .toolbar {
+      margin-bottom: 10px;
+    }
+
+    button {
+      margin: 5px;
+      padding: 5px 10px;
+      cursor: pointer;
+    }
+
+    input[type="file"] {
+      display: none;
+    }
+
+    label {
+      background-color: #007bff;
+      color: white;
+      padding: 5px 10px;
+      cursor: pointer;
+      border-radius: 5px;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="toolbar">
+    <button onclick="canvasSelect.setMode('rect')">矩形</button>
+    <button onclick="canvasSelect.setMode('circle')">圆形</button>
+    <button onclick="canvasSelect.setMode('ellipse')">椭圆</button>
+    <button onclick="canvasSelect.setMode('line')">折线</button>
+    <button onclick="canvasSelect.deleteSelected()">撤回</button>
+    <button onclick="canvasSelect.clearCanvas()">清除所有</button>
+    <button onclick="canvasSelect.saveAnnotations()">保存标注</button>
+    <label for="uploadImage">上传图片</label>
+    <input type="file" id="uploadImage" accept="image/*" />
+  </div>
+  <canvas id="canvas"></canvas>
+
+  <script>
+    class CanvasSelect {
+      constructor(canvasId) {
+        this.canvas = document.getElementById(canvasId);
+        this.ctx = this.canvas.getContext("2d");
+        this.shapes = [];
+        this.mode = "rect";
+        this.isDrawing = false;
+        this.isDragging = false;
+        this.activeShape = null;
+        this.image = new Image();
+        this.imageName = "";
+        this.imageLoaded = false;
+        this.scale = 1;
+        //图片在画布中X轴中的偏移
+        this.offsetX = 0;
+        //图片在画布中Y轴中的偏移
+        this.offsetY = 0;
+        this.startDragX = 0;
+        this.startDragY = 0;
+        this.initEvents();
+      }
+      //初始化事件
+      initEvents() {
+        this.canvas.addEventListener(
+          "mousedown",
+          this.onMouseDown.bind(this)
+        );
+        this.canvas.addEventListener(
+          "mousemove",
+          this.onMouseMove.bind(this)
+        );
+        this.canvas.addEventListener("mouseup", this.onMouseUp.bind(this));
+        document
+          .getElementById("uploadImage")
+          .addEventListener("change", this.uploadImage.bind(this));
+      }
+      //设置类型
+      setMode(mode) {
+        this.mode = mode;
+      }
+      //上传图片
+      uploadImage(event) {
+        const file = event.target.files[0];
+        if (file) {
+          const reader = new FileReader();
+          reader.onload = (e) => {
+            console.log("上传图片的事件", e);
+            this.image.src = e.target.result;
+            this.imageName = file.name;
+            this.image.onload = () => {
+              this.imageLoaded = true;
+              this.fitImage();
+              this.loadSavedAnnotations();
+            };
+          };
+          reader.readAsDataURL(file);
+        }
+      }
+
+      fitImage() {
+        this.canvas.width = Math.min(
+          window.innerWidth * 0.9,
+          this.image.width
+        );
+        this.canvas.height = Math.min(
+          window.innerHeight * 0.8,
+          this.image.height
+        );
+        this.scale = Math.min(
+          this.canvas.width / this.image.width,
+          this.canvas.height / this.image.height
+        );
+        this.offsetX =
+          (this.canvas.width - this.image.width * this.scale) / 2;
+        this.offsetY =
+          (this.canvas.height - this.image.height * this.scale) / 2;
+        this.updateCanvas();
+      }
+
+      //鼠标按下事件回调
+      onMouseDown(event) {
+        const { offsetX, offsetY } = event;
+        const x = (offsetX - this.offsetX) / this.scale;
+        const y = (offsetY - this.offsetY) / this.scale;
+
+        this.activeShape = this.shapes.find((shape) =>
+          this.isPointInShape(shape, x, y)
+        );
+        if (this.activeShape) {
+          this.isDragging = true;
+          this.startDragX = x;
+          this.startDragY = y;
+          return;
+        }
+
+        this.isDrawing = true;
+        let shape = {
+          type: this.mode,
+          x,
+          y,
+          w: 0,
+          h: 0,
+          r: 0,
+          points: [[x, y]],
+        };
+        this.shapes.push(shape);
+        this.activeShape = shape;
+      }
+      //判断是否点击在一个图形里
+      isPointInShape(shape, x, y) {
+        switch (shape.type) {
+          //矩形
+          case "rect":
+            return (
+              x >= shape.x &&
+              x <= shape.x + shape.w &&
+              y >= shape.y &&
+              y <= shape.y + shape.h
+            );
+          //圆
+          case "circle":
+            const dx = x - shape.x;
+            const dy = y - shape.y;
+            return dx * dx + dy * dy <= shape.r * shape.r;
+          // 椭圆
+          case "ellipse":
+            if (shape.w <= 0 || shape.h <= 0) return false; // 非法椭圆直接返回
+            const dxEllipse = x - shape.x;
+            const dyEllipse = y - shape.y;
+            // 椭圆方程: (dx^2)/(a^2) + (dy^2)/(b^2) ≤ 1
+            return (
+              (dxEllipse * dxEllipse) / (shape.w * shape.w) +
+              (dyEllipse * dyEllipse) / (shape.h * shape.h) <=
+              1
+            );
+          default:
+            return false;
+        }
+      }
+
+      //鼠标移动事件回调
+      onMouseMove(event) {
+        if (!this.activeShape) return;
+        const { offsetX, offsetY } = event;
+        const x = (offsetX - this.offsetX) / this.scale;
+        const y = (offsetY - this.offsetY) / this.scale;
+
+        if (this.isDragging) {
+          let dx = x - this.startDragX;
+          let dy = y - this.startDragY;
+          this.activeShape.x += dx;
+          this.activeShape.y += dy;
+          this.startDragX = x;
+          this.startDragY = y;
+        } else if (this.isDrawing) {
+          if (this.activeShape.type === "rect") {
+            this.activeShape.w = x - this.activeShape.x;
+            this.activeShape.h = y - this.activeShape.y;
+          } else if (this.activeShape.type === "circle") {
+            this.activeShape.r = Math.hypot(
+              x - this.activeShape.x,
+              y - this.activeShape.y
+            );
+          } else if (this.activeShape.type === "ellipse") {
+            this.activeShape.w = Math.abs(x - this.activeShape.x);
+            this.activeShape.h = Math.abs(y - this.activeShape.y);
+          } else if (this.activeShape.type === "line") {
+            this.activeShape.points.push([x, y]);
+          }
+        }
+        this.updateCanvas();
+      }
+      //鼠标抬起
+      onMouseUp() {
+        this.isDrawing = false;
+        this.isDragging = false;
+      }
+      //删除选择的
+      deleteSelected() {
+        if (this.activeShape) {
+          this.shapes = this.shapes.filter(
+            (shape) => shape !== this.activeShape
+          );
+          this.activeShape = null;
+          this.updateCanvas();
+        }
+      }
+
+      //本地化标注
+      saveAnnotations() {
+        if (!this.imageName) return;
+        localStorage.setItem(this.imageName, JSON.stringify(this.shapes));
+        alert("标注已保存！");
+      }
+
+      loadSavedAnnotations() {
+        if (this.imageName && localStorage.getItem(this.imageName)) {
+          this.shapes = JSON.parse(localStorage.getItem(this.imageName));
+          this.updateCanvas();
+        }
+      }
+
+      //更新canvas
+      updateCanvas() {
+        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        if (this.imageLoaded) {
+          this.ctx.drawImage(
+            this.image,
+            this.offsetX,
+            this.offsetY,
+            this.image.width * this.scale,
+            this.image.height * this.scale
+          );
+        }
+        this.shapes.forEach((shape) => {
+          this.ctx.strokeStyle = shape === this.activeShape ? "red" : "blue";
+          this.ctx.lineWidth = 2;
+          this.ctx.beginPath();
+          if (shape.type === "rect") {
+            this.ctx.strokeRect(shape.x, shape.y, shape.w, shape.h);
+          } else if (shape.type === "circle") {
+            this.ctx.arc(shape.x, shape.y, shape.r, 0, Math.PI * 2);
+            this.ctx.stroke();
+          } else if (shape.type === "ellipse") {
+            this.ctx.ellipse(
+              shape.x,
+              shape.y,
+              shape.w,
+              shape.h,
+              0,
+              0,
+              Math.PI * 2
+            );
+            this.ctx.stroke();
+          } else if (shape.type === "line") {
+            this.ctx.moveTo(shape.points[0][0], shape.points[0][1]);
+            shape.points.forEach(([px, py]) => this.ctx.lineTo(px, py));
+            this.ctx.stroke();
+          }
+        });
+      }
+      //清除canvas
+      clearCanvas() {
+        this.shapes = [];
+        this.updateCanvas();
+      }
+    }
+
+    const canvasSelect = new CanvasSelect("canvas");
+  </script>
+</body>
+
+</html>
